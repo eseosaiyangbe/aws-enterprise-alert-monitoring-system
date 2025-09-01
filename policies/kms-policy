@@ -1,0 +1,82 @@
+{
+	"Version": "2012-10-17",
+	"Statement": [
+		{
+			"Sid": "AllowRootAccess",
+			"Effect": "Allow",
+			"Principal": {
+				"AWS": "arn:aws:iam::<acct_id>:root"
+			},
+			"Action": "kms:*",
+			"Resource": "*"
+		},
+		{
+			"Sid": "AllowCloudTrailAccess",
+			"Effect": "Allow",
+			"Principal": {
+				"Service": "cloudtrail.amazonaws.com"
+			},
+			"Action": [
+				"kms:Encrypt",
+				"kms:Decrypt",
+				"kms:ReEncrypt*",
+				"kms:GenerateDataKey*",
+				"kms:CreateGrant"
+			],
+			"Resource": "*",
+			"Condition": {
+				"StringEquals": {
+					"aws:SourceArn": "arn:aws:cloudtrail:Region:<acct_id>:trail/demo-cloudtrail"
+				},
+				"StringLike": {
+					"kms:EncryptionContext:aws:cloudtrail:arn": "arn:aws:cloudtrail:*:<acct_id>:trail/*"
+				}
+			}
+		},
+		{
+			"Sid": "AllowKeyManagement",
+			"Effect": "Allow",
+			"Principal": {
+				"AWS": [
+					"arn:aws:iam::<acct_id>:user/<user_name>",
+					"arn:aws:iam::<acct_id>:user/<role_name>"
+				]
+			},
+			"Action": [
+				"kms:Create*",
+				"kms:Describe*",
+				"kms:Enable*",
+				"kms:List*",
+				"kms:Put*",
+				"kms:Update*",
+				"kms:Revoke*",
+				"kms:Disable*",
+				"kms:Get*",
+				"kms:Delete*",
+				"kms:TagResource",
+				"kms:UntagResource",
+				"kms:ScheduleKeyDeletion",
+				"kms:CancelKeyDeletion"
+			],
+			"Resource": "*"
+		},
+		{
+			"Sid": "Allow CloudTrail to create and manage grants",
+			"Effect": "Allow",
+			"Principal": {
+				"Service": "cloudtrail.amazonaws.com"
+			},
+			"Action": [
+				"kms:CreateGrant",
+				"kms:ListGrants",
+				"kms:RevokeGrant"
+			],
+			"Resource": "*",
+			"Condition": {
+				"Bool": {
+					"kms:GrantIsForAWSResource": "true"
+				}
+			}
+		}
+	]
+}

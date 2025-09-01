@@ -1,0 +1,10 @@
+{
+    "Records": [
+        {
+            "EventSource": "aws:sns",
+            "Sns": {
+                "Message": "{ \"eventName\": \"UnauthorizedOperation\", \"sourceIPAddress\": \"192.168.1.1\", \"eventTime\": \"2025-01-11T12:34:56Z\", \"userIdentity\": { \"arn\": \"arn:aws:iam::108188564905:user/test-user\" } }"
+            }
+        }
+    ]
+}

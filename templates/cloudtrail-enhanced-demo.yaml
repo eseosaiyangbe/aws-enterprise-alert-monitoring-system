@@ -1,0 +1,210 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AWS CloudTrail Real-Time Monitoring and Alerting Demo
+
+Parameters:
+  AccountId:
+    Type: String
+    Description: AWS Account ID
+  Region:
+    Type: String
+    Description: AWS Region
+  EmailSubscription:
+    Type: String
+    Description: Email address for SNS notifications
+    AllowedPattern: '^([\\w.%+-]+)@([\\w-]+\\.)+([a-zA-Z]{2,})$'
+    ConstraintDescription: Must be a valid email address.
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "cloudtrail-logs-demo-${AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref KMSKey
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+    DeletionPolicy: Retain
+
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudTrailGetBucketAcl
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !Sub "arn:aws:s3:::cloudtrail-logs-demo-${AccountId}"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudtrail:${Region}:${AccountId}:trail/demo-cloudtrail"
+          - Sid: AllowCloudTrailPutObject
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "arn:aws:s3:::cloudtrail-logs-demo-${AccountId}/AWSLogs/${AccountId}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudtrail:${Region}:${AccountId}:trail/demo-cloudtrail"
+                s3:x-amz-acl: bucket-owner-full-control
+
+  CloudTrail:
+    Type: AWS::CloudTrail::Trail
+    Properties:
+      TrailName: demo-cloudtrail
+      S3BucketName: !Ref S3Bucket
+      IsLogging: true
+      IncludeGlobalServiceEvents: true
+      EnableLogFileValidation: true
+      KMSKeyId: !Ref KMSKey
+      CloudWatchLogsLogGroupArn: !GetAtt CloudWatchLogGroup.Arn
+      CloudWatchLogsRoleArn: !GetAtt CloudWatchLogsRole.Arn
+
+  CloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "aws-cloudtrail-logs-${AccountId}-demo"
+      RetentionInDays: 30
+
+  CloudWatchLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudTrailLogsPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: logs:CreateLogStream
+                Resource: !Sub "arn:aws:logs:${Region}:${AccountId}:log-group:aws-cloudtrail-logs-${AccountId}-demo:*"
+              - Effect: Allow
+                Action: logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${Region}:${AccountId}:log-group:aws-cloudtrail-logs-${AccountId}-demo:*"
+
+  KMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS Key for CloudTrail logs encryption
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowRootAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: AllowCloudTrailAccess
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:CreateGrant
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub "arn:aws:cloudtrail:${Region}:${AccountId}:trail/demo-cloudtrail"
+
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: cloudtrail-alerts-demo
+      Subscription:
+        - Endpoint: !Ref EmailSubscription
+          Protocol: email
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: process-cloudtrail-logs
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+
+          sns = boto3.client('sns')
+          SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
+
+          def lambda_handler(event, context):
+              for record in event['Records']:
+                  log = json.loads(record['Sns']['Message'])
+                  if log.get('eventName') == "UnauthorizedOperation":
+                      sns.publish(
+                          TopicArn=SNS_TOPIC_ARN,
+                          Message=json.dumps(log),
+                          Subject="UnauthorizedOperation Alert"
+                      )
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref SNSTopic
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AWSCloudTrail_FullAccess
+        - arn:aws:iam::aws:policy/AWSKeyManagementServicePowerUser
+        - arn:aws:iam::aws:policy/CloudWatchFullAccess
+      Policies:
+        - PolicyName: LambdaInlinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref SNSTopic
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+Outputs:
+  CloudTrailName:
+    Value: !Ref CloudTrail
+    Description: Name of the CloudTrail trail.
+
+  SNSTopicARN:
+    Value: !Ref SNSTopic
+    Description: ARN of the SNS topic.
+
+  S3BucketName:
+    Value: !Ref S3Bucket
+    Description: Name of the S3 bucket used for CloudTrail logs.
