@@ -3,7 +3,7 @@ This project demonstrates how to build a real-time monitoring, alerting, and aut
 
 
 ## Architecture Overview
-![](aws-project/project1/aws-enterprise-alert-monitoring-system/images/architechture.gif)
+![](/aws-enterprise-alert-monitoring-system/images/architecture.gif)
 
 The above solution is designed to:
 - Capture all API activity in the AWS environment.
