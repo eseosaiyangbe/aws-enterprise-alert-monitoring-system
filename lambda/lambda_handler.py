@@ -4,17 +4,22 @@ import os
 
 # Initialize AWS clients
 sns = boto3.client('sns')
-logger = boto3.client('logs')
 
 # Get environment variables
 SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
 
 def lambda_handler(event, context):
     try:
-        # Iterate through CloudTrail events
+        # Iterate through SNS records (the SNS topic fans in EventBridge
+        # CloudTrail events and fans out the formatted alert)
         for record in event['Records']:
             log_data = json.loads(record['Sns']['Message'])
-            
+
+            # EventBridge wraps the CloudTrail event under "detail";
+            # direct SNS messages carry the fields at the top level.
+            if isinstance(log_data, dict) and 'detail' in log_data:
+                log_data = log_data['detail']
+
             # Extract key details from CloudTrail event
             event_name = log_data.get('eventName', 'UnknownEvent')
             user_identity = log_data.get('userIdentity', {})
@@ -23,7 +28,7 @@ def lambda_handler(event, context):
 
             # Print log for debugging
             print(f"CloudTrail Event: {log_data}")
-            
+
             # Check for specific events (e.g., UnauthorizedOperation)
             if event_name == "UnauthorizedOperation":
                 # Construct alert message
@@ -35,7 +40,7 @@ def lambda_handler(event, context):
                     f"Event Details: {json.dumps(log_data, indent=4)}"
                 )
                 print(alert_message)
-                
+
                 # Send notification via SNS
                 sns.publish(
                     TopicArn=SNS_TOPIC_ARN,
@@ -46,4 +51,3 @@ def lambda_handler(event, context):
     except Exception as e:
         print(f"Error processing event: {str(e)}")
         raise
-
