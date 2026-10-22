@@ -61,7 +61,7 @@ Example: Detect if an unauthorized user attempts to create costly resources (e.g
    - Add an email or phone number as a subscriber.
 
 5. **Deploy the Lambda Function**
-   - Add the code in `lambda/handler.py`.
+   - Add the code in `lambda/lambda_handler.py`.
    - Set environment variables:
      - `SNS_TOPIC_ARN`: ARN of the SNS topic.
    - Attach the necessary IAM role.
@@ -189,8 +189,8 @@ To avoid incurring charges, delete the stack after completing your work:
 
 ## **Files in the Directory**
 
-- **lambda/handler.py**: Lambda function code for processing CloudTrail events.
+- **lambda/lambda_handler.py**: Lambda function code for processing CloudTrail events.
 - **scripts/test-events.json**: Test payload for simulating an SNS event.
 - **README.md**: Documentation for the demo setup.
-- **templates/sns-cloudtrail-lambda.yaml** (Optional): CloudFormation template for automating setup.
+- **templates/cloudtrail-enhanced-demo.yaml** (Optional): CloudFormation template for automating setup.
 
