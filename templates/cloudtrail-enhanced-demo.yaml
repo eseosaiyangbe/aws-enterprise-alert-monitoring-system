@@ -136,12 +136,58 @@ Resources:
         - Endpoint: !Ref EmailSubscription
           Protocol: email
 
+  LambdaSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref SNSTopic
+      Protocol: lambda
+      Endpoint: !GetAtt LambdaFunction.Arn
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref SNSTopic
+
+  SNSTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref SNSTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridgePublish
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref SNSTopic
+
+  CloudTrailEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: cloudtrail-unauthorized-operation
+      Description: Routes UnauthorizedOperation API calls captured by CloudTrail to the alert topic.
+      EventPattern:
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventName:
+            - UnauthorizedOperation
+      State: ENABLED
+      Targets:
+        - Id: AlertTopic
+          Arn: !Ref SNSTopic
+
   LambdaFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: process-cloudtrail-logs
       Handler: index.lambda_handler
-      Runtime: python3.9
+      Runtime: python3.12
       Role: !GetAtt LambdaExecutionRole.Arn
       Code:
         ZipFile: |
@@ -149,18 +195,55 @@ Resources:
           import boto3
           import os
 
+          # Initialize AWS clients
           sns = boto3.client('sns')
+
+          # Get environment variables
           SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
 
           def lambda_handler(event, context):
-              for record in event['Records']:
-                  log = json.loads(record['Sns']['Message'])
-                  if log.get('eventName') == "UnauthorizedOperation":
-                      sns.publish(
-                          TopicArn=SNS_TOPIC_ARN,
-                          Message=json.dumps(log),
-                          Subject="UnauthorizedOperation Alert"
-                      )
+              try:
+                  # Iterate through SNS records (the SNS topic fans in EventBridge
+                  # CloudTrail events and fans out the formatted alert)
+                  for record in event['Records']:
+                      log_data = json.loads(record['Sns']['Message'])
+
+                      # EventBridge wraps the CloudTrail event under "detail";
+                      # direct SNS messages carry the fields at the top level.
+                      if isinstance(log_data, dict) and 'detail' in log_data:
+                          log_data = log_data['detail']
+
+                      # Extract key details from CloudTrail event
+                      event_name = log_data.get('eventName', 'UnknownEvent')
+                      user_identity = log_data.get('userIdentity', {})
+                      source_ip = log_data.get('sourceIPAddress', 'UnknownIP')
+                      timestamp = log_data.get('eventTime', 'UnknownTime')
+
+                      # Print log for debugging
+                      print(f"CloudTrail Event: {log_data}")
+
+                      # Check for specific events (e.g., UnauthorizedOperation)
+                      if event_name == "UnauthorizedOperation":
+                          # Construct alert message
+                          alert_message = (
+                              f"ALERT: UnauthorizedOperation detected!\n\n"
+                              f"User: {user_identity.get('arn', 'UnknownUser')}\n"
+                              f"Source IP: {source_ip}\n"
+                              f"Event Time: {timestamp}\n"
+                              f"Event Details: {json.dumps(log_data, indent=4)}"
+                          )
+                          print(alert_message)
+
+                          # Send notification via SNS
+                          sns.publish(
+                              TopicArn=SNS_TOPIC_ARN,
+                              Message=alert_message,
+                              Subject="CloudTrail UnauthorizedOperation Alert"
+                          )
+
+              except Exception as e:
+                  print(f"Error processing event: {str(e)}")
+                  raise
       Environment:
         Variables:
           SNS_TOPIC_ARN: !Ref SNSTopic
@@ -175,11 +258,6 @@ Resources:
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonS3FullAccess
-        - arn:aws:iam::aws:policy/AWSCloudTrail_FullAccess
-        - arn:aws:iam::aws:policy/AWSKeyManagementServicePowerUser
-        - arn:aws:iam::aws:policy/CloudWatchFullAccess
       Policies:
         - PolicyName: LambdaInlinePolicy
           PolicyDocument:
@@ -194,7 +272,7 @@ Resources:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource: "*"
+                Resource: !Sub "arn:aws:logs:${Region}:${AccountId}:log-group:/aws/lambda/process-cloudtrail-logs:*"
 
 Outputs:
   CloudTrailName:
